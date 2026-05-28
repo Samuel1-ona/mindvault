@@ -11,6 +11,7 @@ import { resources } from "../db/schema.js";
 import type { Network } from "@x402/core/types";
 import type { RoutesConfig } from "@x402/core/server";
 import { config } from "../config.js";
+import { getResource } from "../services/registryClient.js";
 
 const network = config.NETWORK as Network;
 
@@ -53,11 +54,80 @@ export async function dynamicPaywall(
     return;
   }
 
+  // Validate the DB price against the on-chain registry before serving a 402.
+  // If they disagree we refuse the request rather than charge the wrong amount.
+  // TODO: cover this path with unit tests once a test runner is configured.
+  let onChainPrice: string;
+  let onChainCreator: string;
+  try {
+    const onChain = await getOnChainPrice(resourceId);
+    onChainPrice = onChain.price;
+    onChainCreator = onChain.creator;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const cause =
+      err instanceof OnChainLookupError && err.cause instanceof Error
+        ? err.cause.message
+        : undefined;
+    console.error("[paywall] on-chain price lookup failed", {
+      resourceId,
+      error: message,
+      cause,
+      timestamp: new Date().toISOString(),
+    });
+    res.status(503).json({
+      error: "chain_unavailable",
+      message: "Unable to verify resource price. Please try again later.",
+      resourceId,
+    });
+    return;
+  }
+
+  const dbPriceNormalized = normalizeUsdcPrice(resource.price);
+  if (dbPriceNormalized !== onChainPrice) {
+    const timestamp = new Date().toISOString();
+    console.warn(
+      `Price mismatch detected for resource ${resourceId}: DB=$${resource.price} chain=$${onChainPrice}`,
+      {
+        resourceId,
+        dbPrice: resource.price,
+        chainPrice: onChainPrice,
+        publisherWallet: resource.walletAddress,
+        onChainCreator,
+        timestamp,
+      }
+    );
+    res.status(409).json({
+      error: "price_mismatch",
+      message:
+        "Resource price is temporarily unavailable due to a configuration issue. Please try again later.",
+      resourceId,
+    });
+    return;
+  }
+
   // Attach resource to request for the delivery handler
   (req as any).resource = resource;
 
-  // Check cache
-  const cached = middlewareCache.get(resourceId);
+  // Try to get on-chain price if resource is registered
+  let finalPrice = resource.price;
+  if (resource.onchainStatus === "registered") {
+    try {
+      const onchainResource = await getResource(resourceId);
+      if (onchainResource) {
+        // Convert from stroops (7 decimals) to USDC string
+        const onchainPriceUsdc = (Number(onchainResource.price) / 10_000_000).toString();
+        finalPrice = onchainPriceUsdc;
+      }
+    } catch (error) {
+      console.warn(`Failed to fetch on-chain price for ${resourceId}:`, error);
+      // Fall back to database price
+    }
+  }
+
+  // Check cache with final price as part of cache key
+  const cacheKey = `${resourceId}:${finalPrice}`;
+  const cached = middlewareCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.mw(req, res, next);
   }
@@ -70,7 +140,7 @@ export async function dynamicPaywall(
         scheme: "exact" as const,
         network,
         payTo: resource.walletAddress,
-        price: `$${resource.price}`,
+        price: finalPrice,
       },
       description: resource.title,
     },
@@ -78,8 +148,8 @@ export async function dynamicPaywall(
 
   const mw = paymentMiddleware(routes, resourceServer);
 
-  // Cache it
-  middlewareCache.set(resourceId, {
+  // Cache it with the final price key
+  middlewareCache.set(cacheKey, {
     mw,
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
