@@ -20,6 +20,8 @@ use soroban_sdk::{
 const DAY_IN_LEDGERS: u32 = 17280;
 const BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const LIFETIME_THRESHOLD: u32 = BUMP_AMOUNT - DAY_IN_LEDGERS;
+/// Max length for metadata pointers (IPFS URI, content hash, compact JSON anchor).
+pub const MAX_METADATA_POINTER_LEN: u32 = 512;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +47,7 @@ pub enum Error {
     AlreadyRegistered = 1,
     NotFound = 2,
     InvalidPrice = 3,
+    MetadataTooLong = 4,
 }
 
 #[contract]
@@ -65,6 +68,7 @@ impl VaultRegistry {
         if price <= 0 {
             return Err(Error::InvalidPrice);
         }
+        Self::validate_metadata_pointer(&metadata)?;
         let key = DataKey::Resource(id.clone());
         if env.storage().persistent().has(&key) {
             return Err(Error::AlreadyRegistered);
@@ -110,6 +114,7 @@ impl VaultRegistry {
     pub fn update_metadata(env: Env, id: String, metadata: String) -> Result<(), Error> {
         let mut resource = Self::load(&env, &id)?;
         resource.creator.require_auth();
+        Self::validate_metadata_pointer(&metadata)?;
         resource.metadata = metadata;
         Self::save(&env, &resource);
         env.events().publish((symbol_short!("updmeta"), id), ());
@@ -185,6 +190,13 @@ impl VaultRegistry {
 }
 
 impl VaultRegistry {
+    fn validate_metadata_pointer(metadata: &String) -> Result<(), Error> {
+        if metadata.len() > MAX_METADATA_POINTER_LEN {
+            return Err(Error::MetadataTooLong);
+        }
+        Ok(())
+    }
+
     fn load(env: &Env, id: &String) -> Result<Resource, Error> {
         env.storage()
             .persistent()
