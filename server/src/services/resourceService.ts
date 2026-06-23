@@ -135,6 +135,8 @@ async function queryResourceMeta(id: string) {
       verificationStatus: resources.verificationStatus,
       publisherName: publishers.name,
       publisherWallet: resources.walletAddress,
+      onchainStatus: resources.onchainStatus,
+      onchainTxHash: resources.onchainTxHash,
       createdAt: resources.createdAt,
     })
     .from(resources)
