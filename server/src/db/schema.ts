@@ -1,11 +1,4 @@
-import {
-  pgTable,
-  text,
-  real,
-  boolean,
-  timestamp,
-  pgEnum,
-} from "drizzle-orm/pg-core";
+import { pgTable, text, real, boolean, timestamp, pgEnum } from "drizzle-orm/pg-core";
 import { createId } from "@paralleldrive/cuid2";
 
 export const resourceTypeEnum = pgEnum("resource_type", ["file", "link"]);
@@ -15,6 +8,13 @@ export const verificationStatusEnum = pgEnum("verification_status", [
   "verified",
   "rejected",
   "skipped",
+]);
+
+export const onchainStatusEnum = pgEnum("onchain_status_enum", [
+  "none",
+  "pending",
+  "registered",
+  "failed",
 ]);
 
 // Publishers — humans or AI agents that publish resources
@@ -43,16 +43,14 @@ export const resources = pgTable("resources", {
   walletAddress: text("wallet_address").notNull(), // payTo for this resource
   resourceType: resourceTypeEnum("resource_type").notNull(),
   storagePath: text("storage_path"), // Supabase Storage path (for type "file")
-  contentHash: text("content_hash"),
-  externalUrl: text("external_url"), // For type "link"
   contentHash: text("content_hash"), // SHA-256 of canonical content (URL for links, file bytes for files)
+  externalUrl: text("external_url"), // For type "link"
   mimeType: text("mime_type"),
-  verificationStatus: verificationStatusEnum("verification_status")
-    .notNull()
-    .default("pending"),
+  verificationStatus: verificationStatusEnum("verification_status").notNull().default("pending"),
   verificationId: text("verification_id"),
   listed: boolean("listed").notNull().default(false),
-  onchainStatus: text("onchain_status"),
+  onchainStatus: onchainStatusEnum("onchain_status").notNull().default("none"),
+  onchainTxHash: text("onchain_tx_hash"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
