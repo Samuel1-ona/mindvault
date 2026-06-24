@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { resources, publishers, verifications } from "../db/schema.js";
 import { uploadFile, deleteFile } from "../storage/supabaseStorage.js";
@@ -151,9 +151,13 @@ async function queryCatalog(filters?: CatalogListFilters) {
     })
     .from(resources)
     .innerJoin(publishers, eq(resources.publisherId, publishers.id))
-    .where(and(...conditions));
+    .where(eq(resources.listed, true));
 }
 
+// The full listed set is cached once under CATALOG_KEY and all filtering happens
+// in memory. Price is a continuous value, so a per-filter cache key would blow up
+// cardinality; filtering after a single cached read keeps the cache correct and
+// mirrors how the search filter already works (issue #159).
 export async function listCatalog(
   filters?: CatalogListFilters,
 ): Promise<Awaited<ReturnType<typeof queryCatalog>>> {
